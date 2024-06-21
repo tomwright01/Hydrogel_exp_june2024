@@ -1,0 +1,292 @@
+---
+title: "GelMedix Data Analysis"
+output: html_notebook
+author:
+  - Tom Wright^[University of Toronto, twright@kensingtonhealth.org]
+---
+
+```{r setup, echo=FALSE, warn=FALSE}
+library(tidyverse)
+library(magrittr)
+library(ggplot2)
+library(forcats)
+library(stringr)
+library(drc)
+```
+
+```{r load_data, echo=FALSE, warn=FALSE}
+data <- read.csv('data/markers.csv')
+
+data <- data %>%
+  mutate(Step = factor(Step, levels = c('DA 0.001 cd.s/m2 + OP',
+                                        'DA 0.003 cd.s/m2 + OP',
+                                        'DA 0.01 cd.s/m2 + OP',
+                                        'DA 0.03 cd.s/m2 + OP',
+                                        'DA 0.1 cd.s/m2 + OP',
+                                        'DA 0.3 cd.s/m2 + OP',
+                                        'DA 1 cd.s/m2 + OP',
+                                        'DA 3 cd.s/m2 + OP',
+                                        'DA 10 cd.s/m2 + OP',
+                                        'CW 150 cd/m2',
+                                        'LA 0.03 cd.s/m2 + OP',
+                                        'LA 0.3 cd.s/m2 + OP',
+                                        'LA 3 cd.s/m2 + OP',
+                                        'LA 3 cd.s/m2 10 Hz Flicker',
+                                        'LA 3 cd.s/m2 20 Hz Flicker',
+                                        'LA 3 cd.s/m2 30 Hz Flicker',
+                                        'LA 3 cd.s/m2 40 Hz Flicker'))) %>%
+  mutate(Timepoint = factor(Timepoint, levels = c('Baseline',
+                                                  'Day 8',
+                                                  'Day 15',
+                                                  'Day 22',
+                                                  'Day 30',
+                                                  'Day 38'))) %>%
+    mutate(days = as.numeric(ifelse(Timepoint=="Baseline", 0, str_extract(Timepoint, "\\d+"))))
+
+data_flash <- data %>% 
+  filter(!str_detect(Step, "Flicker")) %>%
+  filter(!str_detect(Step, "CW")) %>%
+  mutate(Step = fct_drop(Step))
+
+data_flash %<>%
+  dplyr::select(!Chan) %>%
+  pivot_wider(names_from="Marker", values_from=c("Amp", "Time")) %>%
+  mutate('Amp_ab' = Amp_b - Amp_a) %>%
+  pivot_longer(cols=starts_with(c('Amp_','Time_'))) %>%
+  pivot_wider(names_from="name", values_from="value")
+
+data_flicker <- data %>% 
+  filter(str_detect(Step, "Flicker")) %>%
+  mutate(Step = fct_drop(Step)) %>%
+  dplyr::select(!Time) %>% # drop time values
+  pivot_wider(names_from="Marker", values_from="Amp") %>%
+  mutate(Amp_1 = Peak1 - Trough1,
+         Amp_2 = Peak2 - Trough2,
+         Amp_3 = Peak3 - Trough3,
+         Amp_4 = Peak4 - Trough4,
+         Amp_5 = Peak5 - Trough5) 
+
+ data_flicker <- mutate(data_flicker, Amp = rowMeans(dplyr::select(data_flicker, starts_with("Amp_"))))%>%
+   dplyr::select(Subject, Group, Timepoint, Step, Eye, Amp, days) %>%
+   mutate(Subject = factor(Subject),
+          Group = factor(Group))
+
+
+
+data %>%
+  dplyr::select(Subject, Group, Timepoint) %>%
+  unique() %>%
+  group_by(Group, Subject) %>%
+  summarise(count=n())
+
+```
+
+# Flash data
+
+```{r}
+# Boxplot visualisation of ERG amplitude vs time after intervention by group
+data_flash %>% 
+  filter(Step %in% c('DA 0.01 cd.s/m2 + OP', 'DA 3 cd.s/m2 + OP', 'LA 3 cd.s/m2 + OP')) %>%
+  ggplot(aes(x=Timepoint, y=Amp_ab, color=Group)) +
+  geom_boxplot() +
+  facet_grid(rows=vars(Step), cols=vars(Eye), scales="free_y")
+```
+## DA0.01 data only
+This data is selected as it's a widely used standard flash intensity
+
+```{r}
+# Single variate ANOVA analysis of DA0.01 data
+
+model <- data_flash %>% 
+  filter(Step == 'DA 0.01 cd.s/m2 + OP') %>%
+  lm(Amp_ab ~ I(Subject) + Group * days - 1, data=.)
+
+anova(model)
+summary(model)
+  
+```
+```{r}
+# Visualisation of DA0.01 data with linear smoothing
+data_flash %>% 
+  filter(Step == 'DA 0.01 cd.s/m2 + OP') %>%
+  ggplot(aes(x=days, y=Amp_b, color=Group, group=Group)) +
+  geom_point() +
+  stat_smooth(method=lm, se=TRUE) +
+  ggtitle('DA 0.01 Smooth=Linear')
+```
+
+```{r}
+# Visualisation of DA0.01 data with loess smoothing
+data_flash %>% 
+  filter(Step == 'DA 0.01 cd.s/m2 + OP') %>%
+  ggplot(aes(x=days, y=Amp_ab, color=Group, group=Group)) +
+  geom_point() +
+  stat_smooth(method=loess, se=TRUE) +
+  ggtitle('DA 0.01 Smooth=Loess')
+```
+
+```{r}
+data_flash %>% 
+  filter(Step == 'DA 0.01 cd.s/m2 + OP') %>%
+  ggplot(aes(x=Timepoint, y=Amp_ab, fill=Group)) +
+  stat_summary(fun="mean", geom="bar", position = position_dodge(0.95)) +
+  stat_summary(fun='mean', geom='point', position = position_dodge(0.95), size=1) +
+  stat_summary(fun.data = "mean_cl_normal", geom="errorbar", position = position_dodge(0.95), width=0.2)
+```
+
+## DA3.0 data only
+This data is selected as it's a widely used standard flash intensity
+
+```{r}
+model <- data_flash %>% 
+  filter(Step == 'DA 3 cd.s/m2 + OP') %>%
+  lm(Amp_ab ~ I(Subject) + Group * days - 1, data=.)
+
+anova(model)
+summary(model)
+  
+```
+```{r}
+data_flash %>% 
+  filter(Step == 'DA 3 cd.s/m2 + OP') %>%
+  ggplot(aes(x=days, y=Amp_ab, color=Group, group=Group)) +
+  geom_point() +
+  stat_smooth(method=lm, se=TRUE) +
+  ggtitle('DA 3 Smooth=Linear')
+```
+```{r}
+data_flash %>% 
+  filter(Step == 'DA 3 cd.s/m2 + OP') %>%
+  ggplot(aes(x=days, y=Amp_ab, color=Group, group=Group)) +
+  geom_point() +
+  stat_smooth(method=loess, se=TRUE) +
+  ggtitle('DA 3 Smooth=Loess')
+```
+## LA3.0 data only
+This data is selected as it's a widely used standard flash intensity
+
+```{r}
+model <- data_flash %>% 
+  filter(Step == 'LA 3 cd.s/m2 + OP') %>%
+  lm(Amp_ab ~ I(Subject) + Group * days -1, data=.)
+
+anova(model)
+summary(model)
+  
+```
+```{r}
+data_flash %>% 
+  filter(Step == 'LA 3 cd.s/m2 + OP') %>%
+  ggplot(aes(x=days, y=Amp_ab, color=Group, group=Group)) +
+  geom_point() +
+  stat_smooth(method=lm, se=TRUE) +
+  ggtitle('LA 3 Smooth=Linear')
+```
+
+
+```{r}
+data_flash %>% 
+  filter(Step == 'LA 3 cd.s/m2 + OP') %>%
+  ggplot(aes(x=days, y=Amp_ab, color=Group, group=Group)) +
+  geom_point() +
+  stat_smooth(method=loess, se=TRUE) +
+  ggtitle('LA 3 Smooth=Loess')
+```
+# Light adapted flicker
+## 10 Hz
+```{r}
+data_flicker %>% 
+  filter(Step == 'LA 3 cd.s/m2 10 Hz Flicker') %>%
+  ggplot(aes(x=days, y=Amp, color=Group, group=Group)) +
+  geom_point() +
+  stat_smooth(method=lm, se=TRUE) +
+  ggtitle('LA Flicker 10Hz. Smooth=Linear')
+
+```
+```{r}
+model <- data_flicker %>% 
+  filter(Step == 'LA 3 cd.s/m2 10 Hz Flicker') %>%
+  lm(Amp ~ I(Subject) + Group * days -1, data=.)
+
+anova(model)
+summary(model)
+  
+```
+## 20 Hz
+```{r}
+data_flicker %>% 
+  filter(Step == 'LA 3 cd.s/m2 20 Hz Flicker') %>%
+  ggplot(aes(x=days, y=Amp, color=Group, group=Group)) +
+  geom_point() +
+  stat_smooth(method=lm, se=TRUE) +
+  ggtitle('LA Flicker 20Hz. Smooth=Linear')
+
+```
+```{r}
+model <- data_flicker %>% 
+  filter(Step == 'LA 3 cd.s/m2 20 Hz Flicker') %>%
+  lm(Amp ~ I(Subject) + Group * days -1, data=.)
+
+anova(model)
+summary(model)
+```
+## 30 Hz
+```{r}
+data_flicker %>% 
+  filter(Step == 'LA 3 cd.s/m2 30 Hz Flicker') %>%
+  ggplot(aes(x=days, y=Amp, color=Group, group=Group)) +
+  geom_point() +
+  stat_smooth(method=lm, se=TRUE) +
+  ggtitle('LA Flicker 30Hz. Smooth=Linear')
+
+```
+```{r}
+model <- data_flicker %>% 
+  filter(Step == 'LA 3 cd.s/m2 30 Hz Flicker') %>%
+  lm(Amp ~ I(Subject) + Group * days -1, data=.)
+
+anova(model)
+summary(model)
+```
+## 40 Hz
+```{r}
+data_flicker %>% 
+  filter(Step == 'LA 3 cd.s/m2 40 Hz Flicker') %>%
+  ggplot(aes(x=days, y=Amp, color=Group, group=Group)) +
+  geom_point() +
+  stat_smooth(method=lm, se=TRUE) +
+  ggtitle('LA Flicker 40Hz. Smooth=Linear')
+
+```
+```{r}
+model <- data_flicker %>% 
+  filter(Step == 'LA 3 cd.s/m2 40 Hz Flicker') %>%
+  lm(Amp ~ I(Subject) + Group * days -1, data=.)
+
+anova(model)
+summary(model)
+  
+```
+
+# Intensity response functions
+
+Change in b-wave amplitude with increasing stimulus intensity can be described using a Michaelis-Menton hyperbolic function.
+
+__Vmax__ is interpreted as an indicator of photoreceptor / retinal health. A reduction in Vmax can occur secondary to loss of photoreceptors, disruption of the dark current or inner retinal dyfunction. __K__ is interpreted as an index of retinal sensitivity representing the efficiency of quantal capture. [link](https://iscev.wildapricot.org/resources/Documents/StandardsEtc/DarkAdaptedERGb-wave-transfer(intensity-response)function[draft].pdf)
+
+```{r naka_rushton, echo=FALSE, results='asis'}
+t <- data_flash %>%
+  mutate(Intensity = as.numeric(str_extract(Step, "\\d+\\.*\\d*")))
+
+m<-t %>%
+  filter(Condition=='DA' & Timepoint=='Baseline') %>%
+  drm(Amp_ab~Intensity, data=., Subject, fct=MM.2(),lowerl=c(0,0), upperl=c(500,1))
+
+plot(m, col=TRUE, lwd=1)
+
+m2<-t %>%
+  filter(Condition=='DA' & Timepoint=='Day 8') %>%
+  drm(Amp_b~Intensity, data=., Subject, fct=MM.2(),lowerl=c(0,0), upperl=c(500,1))
+
+plot(m, col=TRUE, lwd=1)
+```  
